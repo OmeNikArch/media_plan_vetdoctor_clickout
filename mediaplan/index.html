@@ -1,158 +1,11 @@
-# -*- coding: utf-8 -*-
-"""Медиаплан Click Out для сети ветклиник «Ветдоктор» (Екатеринбург). Генератор HTML."""
-
-SRC = {
-    "ozon":  {"name": "Ozon Performance", "cpm": 224.02, "ctr": 0.0064, "cls": "ozon"},
-    "urban": {"name": "Яндекс Urban Ads", "cpm": 149.31, "ctr": 0.0056, "cls": "urban"},
-    "wb":    {"name": "WB Media",         "cpm": 200.11, "ctr": 0.0096, "cls": "wb"},
-}
-GEO_K = 1.15          # надбавка за узкое гео (Екатеринбург + В. Пышма)
-CR = {"cons": 0.015, "base": 0.03, "opt": 0.05}
-K_ZAPIS, K_DOHOD, CHEK = 0.85, 0.60, 6000
-
-MONTHS = [
-    {"n": "Месяц 1", "tag": "Тест", "budgets": {"ozon": 240000, "urban": 180000, "wb": 180000}},
-    {"n": "Месяц 2", "tag": "Оптимизация", "budgets": {"ozon": 400000, "urban": 200000, "wb": 300000}},
-    {"n": "Месяц 3", "tag": "Масштаб", "budgets": {"ozon": 550000, "urban": 250000, "wb": 400000}},
-]
-WORK = 90000  # СРК, три источника
-
-def calc(src_key, budget):
-    s = SRC[src_key]
-    cpm = s["cpm"] * GEO_K
-    imps = budget / cpm * 1000
-    clicks = imps * s["ctr"]
-    cpc = cpm / 1000 / s["ctr"]
-    return {"budget": budget, "cpm": cpm, "imps": imps, "clicks": clicks, "cpc": cpc}
-
-def funnel(clicks, budget, cr, work=0):
-    leads = clicks * cr
-    zap = leads * K_ZAPIS
-    doh = zap * K_DOHOD
-    rev = doh * CHEK
-    total = budget + work
-    return {"leads": leads, "zap": zap, "doh": doh, "rev": rev,
-            "cpl": total / leads if leads else 0,
-            "cac": total / doh if doh else 0,
-            "drr": total / rev * 100 if rev else 0}
-
-def n(x, d=0):
-    s = f"{x:,.{d}f}".replace(",", " ").replace(".", ",")
-    return s
-
-# ---------- расчёты по месяцам ----------
-rows_plan, tot = [], {"budget": 0, "imps": 0, "clicks": 0}
-for m in MONTHS:
-    per, mt = {}, {"budget": 0, "imps": 0, "clicks": 0}
-    for k in SRC:
-        c = calc(k, m["budgets"][k]); per[k] = c
-        for f in mt: mt[f] += c[f]
-    mt["cpc"] = mt["budget"] / mt["clicks"]
-    mt["cpm"] = mt["budget"] / mt["imps"] * 1000
-    mt["ctr"] = mt["clicks"] / mt["imps"] * 100
-    rows_plan.append({"m": m, "per": per, "tot": mt})
-    for f in tot: tot[f] += mt[f]
-tot["cpc"] = tot["budget"] / tot["clicks"]
-tot["work"] = WORK * len(MONTHS)
-tot["all"] = tot["budget"] + tot["work"]
-
-# сценарии по итогу 3 месяцев
-sc3 = {k: funnel(tot["clicks"], tot["budget"], v, tot["work"]) for k, v in CR.items()}
-# сценарии по месяцу 1
-m1 = rows_plan[0]["tot"]
-sc1 = {k: funnel(m1["clicks"], m1["budget"], v, WORK) for k, v in CR.items()}
-
-# варианты входа (месяц 1)
-ENTRY = [
-    {"key": "pilot", "name": "Пилот", "sub": "один источник, Ozon", "work": 50000,
-     "b": {"ozon": 250000, "urban": 0, "wb": 0}},
-    {"key": "base", "name": "Рекомендуем", "sub": "три источника", "work": 90000,
-     "b": {"ozon": 240000, "urban": 180000, "wb": 180000}},
-    {"key": "max", "name": "Потолок гео", "sub": "три источника, максимум", "work": 90000,
-     "b": {"ozon": 550000, "urban": 250000, "wb": 400000}},
-]
-entry_rows = []
-for e in ENTRY:
-    cl = sum(calc(k, v)["clicks"] for k, v in e["b"].items() if v)
-    im = sum(calc(k, v)["imps"] for k, v in e["b"].items() if v)
-    bud = sum(e["b"].values())
-    f = funnel(cl, bud, CR["base"], e["work"])
-    entry_rows.append({"e": e, "bud": bud, "clicks": cl, "imps": im, "f": f})
-
-# диагностический кластер: 35 % бюджета месяца 2 на КТ/МРТ-посадочные
-DIAG_SHARE = 0.35
-diag_clicks = rows_plan[1]["tot"]["clicks"] * DIAG_SHARE
-diag_budget = rows_plan[1]["tot"]["budget"] * DIAG_SHARE
-diag = {}
-for label, cr, chek in (("Консервативно", 0.010, 9000), ("База", 0.020, 10350), ("Оптимистично", 0.035, 12000)):
-    leads = diag_clicks * cr; zap = leads * K_ZAPIS; doh = zap * K_DOHOD
-    diag[label] = {"cr": cr, "chek": chek, "leads": leads, "doh": doh, "rev": doh * chek,
-                   "cac": diag_budget / doh, "drr": diag_budget / (doh * chek) * 100}
-
-# сколько это от цели ×3 (нужно +10 000 сделок/мес)
-GOAL = 10000
-share_m3 = {k: funnel(rows_plan[2]["tot"]["clicks"], rows_plan[2]["tot"]["budget"], v, WORK)["doh"] / GOAL * 100
-            for k, v in CR.items()}
-m3f = {k: funnel(rows_plan[2]["tot"]["clicks"], rows_plan[2]["tot"]["budget"], v, WORK) for k, v in CR.items()}
-
-
-# ---------- ёмкость гео ----------
-AUD = {"ozon": 900_000, "urban": 1_200_000, "wb": 1_000_000}   # оценка активной аудитории площадки в гео
-ZOO_SHARE = 0.25
-FREQ = 3.5
-cap_rows, cap_total = [], 0
-for k, s in SRC.items():
-    core = AUD[k] * ZOO_SHARE
-    imps = core * FREQ
-    bud = imps / 1000 * s["cpm"] * GEO_K
-    cap_total += bud
-    cap_rows.append({"k": k, "name": s["name"], "aud": AUD[k], "core": core, "imps": imps, "bud": bud})
-
-# ---------- распределение по посадочным ----------
-LANDINGS = [
-    ("Диагностика: КТ и МРТ", "35 %", "9 000 – 12 000 ₽",
-     "КТ 9 000 ₽ (11 700 ₽ с контрастом), МРТ 12 000 ₽. Первый КТ для животных в Свердловской области и первый собственный МРТ в России — аргумент, которого нет ни у кого в регионе. Гео расширяем на область: за такой диагностикой едут из Нижнего Тагила и Каменска-Уральского.",
-     "/services/diagnostiks/kt-sobake-koshke/, /services/diagnostiks/mrt/"),
-    ("Хирургия, травматология, онкология", "20 %", "высокий, по прайсу",
-     "Отложенный спрос: владелец знает про уплотнение или хромоту, но откладывает. Баннер работает как напоминание, а не как перехват поиска. Неврология приземляется на МРТ — на сайте МРТ прямо описан как метод диагностики нервной системы.",
-     "/services/khirurgiya/, /services/onkologiya/ + страницы под неврологию и травматологию — уточняем"),
-    ("Плановые массовые услуги", "30 %", "1 700 – 6 000 ₽",
-     "Кастрация и стерилизация, вакцинация, чипирование, стоматология, диспансеризация. Самый дешёвый лид и главный объём: покупка корма и наполнителя — прямой сигнал «есть питомец», а плановую услугу можно отложить на неделю, чем баннерный трафик и живёт.",
-     "/services/vakcinaciya-i-privivki-zhivotnym/, /services/prays/kastraciya-sterilizaciya-kota/, /services/stomatologiya/"),
-    ("Бренд: 5 клиник, две круглосуточные", "15 %", "—",
-     "Охватный слой под замеры: узнаваемость сети, круглосуточность, 21 год и 224 124 пациента. Метрика — не CPL, а прирост поиска по имени и доля прямых заходов.",
-     "vetdoctor.ru + /contact/"),
-]
-
-TARGETING = {
-    "ozon": [
-        "Покупают в категории <b>«Зоотовары»</b> — корма, лакомства, наполнители, с частотой покупки за 90 дней",
-        "Покупают в <b>«Зоотовары → Ветаптека»</b>: витамины, препараты от паразитов — самый горячий сигнал для клиники",
-        "Смотрят <b>«Груминг и уход»</b>: когтерезы, фурминаторы, шампуни",
-        "Заказывали корм в <b>Ozon fresh</b> — регулярный покупатель",
-        "Экран <b>«Заказ выполнен»</b> после покупки корма — самый конверсионный плейсмент площадки",
-        "Свой сегмент по хэшу телефонов из базы клиники: возврат на вакцинацию и диспансеризацию",
-        "Гео Екатеринбург и В. Пышма; для КТ и МРТ — вся Свердловская область",
-    ],
-    "urban": [
-        "Маркет, категория <b>«Товары для животных»</b>: корма, наполнители, амуниция, ветпрепараты",
-        "<b>Лавка</b>: заказывали корм и наполнитель — регулярная покупка в быстрой доставке",
-        "<b>Яндекс Go</b>: гео по районам вокруг каждой из пяти клиник, тарифы Комфорт+ как прокси дохода",
-        "Готовые сегменты медийки <b>«Домашние животные»</b>, «Семья и дети»",
-        "Доход средний и выше — под КТ, МРТ и хирургию",
-        "CRM-ретаргетинг по базе клиники и look-alike",
-    ],
-    "wb": [
-        "Покупают в категории <b>«Зоотовары»</b>: корма, лакомства, амуниция, лежанки",
-        "DMP: <b>клали в корзину</b> корм или ветдиету за последние 30 дней",
-        "Интересуются <b>«Зоотовары → Аптечка»</b> — прямой сигнал для клиники",
-        "<b>«Для собак → Одежда»</b> — владельцы мелких пород, самая внимательная к здоровью аудитория",
-        "Женщины 25–44 — ядро площадки (78 %) и основной покупатель зоотоваров",
-        "Гео: Екатеринбург и В. Пышма",
-    ],
-}
-
-CSS = """
+<!DOCTYPE html>
+<html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>Медиаплан Click Out · Ветдоктор · Cerebro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
 *{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#0c0c0d; --card:#161618; --card2:#1d1d21; --line:#2a2a2f; --line2:#38383f;
@@ -268,19 +121,7 @@ footer{padding:40px 0 0;color:var(--tx3);font-size:12.5px;font-family:'JetBrains
   .toc{display:none}
   @page{size:A4;margin:12mm}
 }
-"""
-
-H = []
-A = H.append
-
-A(f"""<!DOCTYPE html>
-<html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex, nofollow">
-<title>Медиаплан Click Out · Ветдоктор · Cerebro</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<style>{CSS}</style></head><body><div class="wrap">
+</style></head><body><div class="wrap">
 
 <header>
   <div class="kicker"><i class="bar"></i><span>Медиаплан · Cerebro Click Out · 16.09.2026</span></div>
@@ -292,7 +133,7 @@ A(f"""<!DOCTYPE html>
   <dl class="meta">
     <div><dt>Клиент</dt><dd>Сеть «Ветдоктор», 5 клиник</dd></div>
     <div><dt>Гео</dt><dd>Екатеринбург + В. Пышма</dd></div>
-    <div><dt>Бюджет 3 мес.</dt><dd>{n(tot['budget'])} ₽ + работа {n(tot['work'])} ₽</dd></div>
+    <div><dt>Бюджет 3 мес.</dt><dd>2 700 000 ₽ + работа 270 000 ₽</dd></div>
     <div><dt>Горизонт</dt><dd>3 месяца, тест — 4 недели</dd></div>
   </dl>
   <nav class="toc">
@@ -375,14 +216,7 @@ A(f"""<!DOCTYPE html>
   на 19,2 млн ₽ за полтора года, ROAS до 700 % (средний 430 % в 2025-м). Это пример того, что аудитория владельцев
   на площадке отзывчива, а не прогноз для клиники.</div>
 </section>
-""")
 
-cap_html = "".join(
-    f"""<tr><td class="name"><span class="chip {r['k']}">{r['name']}</span></td>
-    <td class="num">{n(r['aud'])}</td><td class="num">{n(r['core'])}</td>
-    <td class="num">{n(r['imps'])}</td><td class="num">{n(r['bud'])} ₽</td></tr>""" for r in cap_rows)
-
-A(f"""
 <section id="s3">
   <div class="kicker"><i class="bar"></i><span>03 · География и ёмкость</span></div>
   <h2>Сколько денег гео <em>вообще способно принять</em></h2>
@@ -393,13 +227,19 @@ A(f"""
   <div class="scroll"><table class="tbl">
     <tr><th>Источник</th><th class="num">Аудитория в гео, оценка</th><th class="num">Ядро «покупают зоотовары»</th>
     <th class="num">Показов при частоте 3,5</th><th class="num">Ёмкость бюджета в месяц</th></tr>
-    {cap_html}
-    <tr class="tot"><td>Итого по трём источникам</td><td class="num">≈ 3,1 млн</td><td class="num">≈ {n(sum(r['core'] for r in cap_rows))}</td>
-    <td class="num">≈ {n(sum(r['imps'] for r in cap_rows))}</td><td class="num">≈ {n(cap_total)} ₽</td></tr>
+    <tr><td class="name"><span class="chip ozon">Ozon Performance</span></td>
+    <td class="num">900 000</td><td class="num">225 000</td>
+    <td class="num">787 500</td><td class="num">202 878 ₽</td></tr><tr><td class="name"><span class="chip urban">Яндекс Urban Ads</span></td>
+    <td class="num">1 200 000</td><td class="num">300 000</td>
+    <td class="num">1 050 000</td><td class="num">180 292 ₽</td></tr><tr><td class="name"><span class="chip wb">WB Media</span></td>
+    <td class="num">1 000 000</td><td class="num">250 000</td>
+    <td class="num">875 000</td><td class="num">201 361 ₽</td></tr>
+    <tr class="tot"><td>Итого по трём источникам</td><td class="num">≈ 3,1 млн</td><td class="num">≈ 775 000</td>
+    <td class="num">≈ 2 712 500</td><td class="num">≈ 584 531 ₽</td></tr>
   </table></div>
   <div class="g3" style="margin-top:18px">
     <div class="card acc"><span class="tag y">Отсюда бюджет месяца 1</span>
-      <p>Зоо-ядро трёх источников держит примерно <b>{n(cap_total)} ₽ в месяц</b> без перегрева частоты. Поэтому тестовый
+      <p>Зоо-ядро трёх источников держит примерно <b>584 531 ₽ в месяц</b> без перегрева частоты. Поэтому тестовый
       месяц мы ставим в <b>600 000 ₽</b> — ровно по ёмкости точных сегментов, а не «сколько дадут».</p></div>
     <div class="card"><span class="tag">Отсюда потолок</span>
       <p>Выше 1,2–1,5 млн ₽ в месяц по трём источникам в этом гео растёт не охват, а частота. Поэтому месяц 3 — это
@@ -424,9 +264,9 @@ A(f"""
   категорийные запросы зоотоваров («корм для кошек», «наполнитель»), а не запросы про ветуслуги.
   Разделы сайта нам всё равно нужны — но как посадочные и как источник смыслов для макетов, не как семантика.</p>
   <div class="g3">
-    <div class="card"><span class="tag"><span class="chip ozon">Ozon Performance</span></span><ul>{''.join(f'<li>{x}</li>' for x in TARGETING['ozon'])}</ul></div>
-    <div class="card"><span class="tag"><span class="chip urban">Яндекс Urban Ads</span></span><ul>{''.join(f'<li>{x}</li>' for x in TARGETING['urban'])}</ul></div>
-    <div class="card"><span class="tag"><span class="chip wb">WB Media</span></span><ul>{''.join(f'<li>{x}</li>' for x in TARGETING['wb'])}</ul></div>
+    <div class="card"><span class="tag"><span class="chip ozon">Ozon Performance</span></span><ul><li>Покупают в категории <b>«Зоотовары»</b> — корма, лакомства, наполнители, с частотой покупки за 90 дней</li><li>Покупают в <b>«Зоотовары → Ветаптека»</b>: витамины, препараты от паразитов — самый горячий сигнал для клиники</li><li>Смотрят <b>«Груминг и уход»</b>: когтерезы, фурминаторы, шампуни</li><li>Заказывали корм в <b>Ozon fresh</b> — регулярный покупатель</li><li>Экран <b>«Заказ выполнен»</b> после покупки корма — самый конверсионный плейсмент площадки</li><li>Свой сегмент по хэшу телефонов из базы клиники: возврат на вакцинацию и диспансеризацию</li><li>Гео Екатеринбург и В. Пышма; для КТ и МРТ — вся Свердловская область</li></ul></div>
+    <div class="card"><span class="tag"><span class="chip urban">Яндекс Urban Ads</span></span><ul><li>Маркет, категория <b>«Товары для животных»</b>: корма, наполнители, амуниция, ветпрепараты</li><li><b>Лавка</b>: заказывали корм и наполнитель — регулярная покупка в быстрой доставке</li><li><b>Яндекс Go</b>: гео по районам вокруг каждой из пяти клиник, тарифы Комфорт+ как прокси дохода</li><li>Готовые сегменты медийки <b>«Домашние животные»</b>, «Семья и дети»</li><li>Доход средний и выше — под КТ, МРТ и хирургию</li><li>CRM-ретаргетинг по базе клиники и look-alike</li></ul></div>
+    <div class="card"><span class="tag"><span class="chip wb">WB Media</span></span><ul><li>Покупают в категории <b>«Зоотовары»</b>: корма, лакомства, амуниция, лежанки</li><li>DMP: <b>клали в корзину</b> корм или ветдиету за последние 30 дней</li><li>Интересуются <b>«Зоотовары → Аптечка»</b> — прямой сигнал для клиники</li><li><b>«Для собак → Одежда»</b> — владельцы мелких пород, самая внимательная к здоровью аудитория</li><li>Женщины 25–44 — ядро площадки (78 %) и основной покупатель зоотоваров</li><li>Гео: Екатеринбург и В. Пышма</li></ul></div>
   </div>
   <div class="note"><b>Форматы:</b> Ozon — баннеры на главной, в поиске, в карточке, видеобаннер и экран «Заказ выполнен»
   (самый конверсионный плейсмент площадки). Urban Ads — один кабинет на Маркет, Еду, Лавку, Go, Деливери и Доставку,
@@ -441,57 +281,17 @@ A(f"""
   под каждый свой сегмент, свой макет и своя метрика.</p>
   <div class="scroll"><table class="tbl">
     <tr><th>Кластер</th><th class="num">Доля бюджета</th><th class="num">Чек</th><th>Логика</th><th>Посадочные</th></tr>
-    {''.join(f'<tr><td class="name"><b>{a}</b></td><td class="num">{b}</td><td class="num">{c}</td><td>{d}</td><td style="font-size:12px;color:#74747d">{e}</td></tr>' for a,b,c,d,e in LANDINGS)}
+    <tr><td class="name"><b>Диагностика: КТ и МРТ</b></td><td class="num">35 %</td><td class="num">9 000 – 12 000 ₽</td><td>КТ 9 000 ₽ (11 700 ₽ с контрастом), МРТ 12 000 ₽. Первый КТ для животных в Свердловской области и первый собственный МРТ в России — аргумент, которого нет ни у кого в регионе. Гео расширяем на область: за такой диагностикой едут из Нижнего Тагила и Каменска-Уральского.</td><td style="font-size:12px;color:#74747d">/services/diagnostiks/kt-sobake-koshke/, /services/diagnostiks/mrt/</td></tr><tr><td class="name"><b>Хирургия, травматология, онкология</b></td><td class="num">20 %</td><td class="num">высокий, по прайсу</td><td>Отложенный спрос: владелец знает про уплотнение или хромоту, но откладывает. Баннер работает как напоминание, а не как перехват поиска. Неврология приземляется на МРТ — на сайте МРТ прямо описан как метод диагностики нервной системы.</td><td style="font-size:12px;color:#74747d">/services/khirurgiya/, /services/onkologiya/ + страницы под неврологию и травматологию — уточняем</td></tr><tr><td class="name"><b>Плановые массовые услуги</b></td><td class="num">30 %</td><td class="num">1 700 – 6 000 ₽</td><td>Кастрация и стерилизация, вакцинация, чипирование, стоматология, диспансеризация. Самый дешёвый лид и главный объём: покупка корма и наполнителя — прямой сигнал «есть питомец», а плановую услугу можно отложить на неделю, чем баннерный трафик и живёт.</td><td style="font-size:12px;color:#74747d">/services/vakcinaciya-i-privivki-zhivotnym/, /services/prays/kastraciya-sterilizaciya-kota/, /services/stomatologiya/</td></tr><tr><td class="name"><b>Бренд: 5 клиник, две круглосуточные</b></td><td class="num">15 %</td><td class="num">—</td><td>Охватный слой под замеры: узнаваемость сети, круглосуточность, 21 год и 224 124 пациента. Метрика — не CPL, а прирост поиска по имени и доля прямых заходов.</td><td style="font-size:12px;color:#74747d">vetdoctor.ru + /contact/</td></tr>
   </table></div>
   <div class="note"><b>Что проверяем на посадочных до старта:</b> онлайн-запись и телефон на первом экране,
   цена услуги без «уточняйте», адреса пяти клиник с режимом работы, скорость на мобильном (весь трафик площадок —
   мобильный), цели в Метрике на запись, звонок и отправку формы, пиксели трёх площадок и связка с МИС или CRM,
   чтобы считать не до заявки, а до дошедшего пациента.</div>
 </section>
-""")
 
-plan_html = ""
-for i, r in enumerate(rows_plan, 1):
-    m, per, mt = r["m"], r["per"], r["tot"]
-    plan_html += f'<tr class="head"><td colspan="10">{m["n"]} · {m["tag"]} · бюджет {n(mt["budget"])} ₽ + работа {n(WORK)} ₽</td></tr>'
-    for k, s in SRC.items():
-        c = per[k]
-        f = funnel(c["clicks"], c["budget"], CR["base"])
-        plan_html += f"""<tr><td class="name"><span class="chip {k}">{s['name']}</span></td>
-        <td class="num">{n(c['budget'])}</td><td class="num">{n(c['cpm'])}</td><td class="num">{n(c['imps'])}</td>
-        <td class="num">{n(s['ctr']*100,2)} %</td><td class="num">{n(c['clicks'])}</td><td class="num">{n(c['cpc'],1)}</td>
-        <td class="num">{n(f['leads'])}</td><td class="num">{n(f['zap'])}</td><td class="num">{n(f['doh'])}</td></tr>"""
-    mf = funnel(mt["clicks"], mt["budget"], CR["base"], WORK)
-    plan_html += f"""<tr class="tot"><td>Итого {m['n'].lower()}</td><td class="num">{n(mt['budget'])}</td>
-    <td class="num">{n(mt['cpm'])}</td><td class="num">{n(mt['imps'])}</td><td class="num">{n(mt['ctr'],2)} %</td>
-    <td class="num">{n(mt['clicks'])}</td><td class="num">{n(mt['cpc'],1)}</td><td class="num">{n(mf['leads'])}</td>
-    <td class="num">{n(mf['zap'])}</td><td class="num">{n(mf['doh'])}</td></tr>"""
-tf = sc3["base"]
-plan_html += f"""<tr class="tot"><td>Всего за 3 месяца</td><td class="num">{n(tot['budget'])}</td><td class="num">—</td>
-<td class="num">{n(tot['imps'])}</td><td class="num">—</td><td class="num">{n(tot['clicks'])}</td>
-<td class="num">{n(tot['cpc'],1)}</td><td class="num">{n(tf['leads'])}</td><td class="num">{n(tf['zap'])}</td>
-<td class="num">{n(tf['doh'])}</td></tr>"""
-
-def sc_table(d, budget, work, label):
-    names = {"cons": ("Консервативный", "CR 1,5 %"), "base": ("Базовый", "CR 3,0 %"), "opt": ("Оптимистичный", "CR 5,0 %")}
-    rows = ""
-    for k in ("cons", "base", "opt"):
-        f, (nm, cr) = d[k], names[k]
-        cls = ' class="tot"' if k == "base" else ""
-        rows += f"""<tr{cls}><td class="name"><b>{nm}</b><br><span style="font-size:11px;color:#74747d">{cr}</span></td>
-        <td class="num">{n(f['leads'])}</td><td class="num">{n(f['zap'])}</td><td class="num">{n(f['doh'])}</td>
-        <td class="num">{n(f['cpl'])} ₽</td><td class="num">{n(f['cac'])} ₽</td><td class="num">{n(f['rev'])} ₽</td>
-        <td class="num">{n(f['drr'],1)} %</td></tr>"""
-    return f"""<h3 style="margin-top:22px">{label} · бюджет {n(budget)} ₽ + работа {n(work)} ₽</h3>
-    <div class="scroll"><table class="tbl" style="margin-top:8px">
-    <tr><th>Сценарий</th><th class="num">Заявки</th><th class="num">Записи</th><th class="num">Дошли на первичку</th>
-    <th class="num">CPL</th><th class="num">Цена дошедшего</th><th class="num">Выручка первички</th><th class="num">ДРР</th></tr>
-    {rows}</table></div>"""
-
-A(f"""
 <section id="s6">
   <div class="kicker"><i class="bar"></i><span>06 · Медиаплан</span></div>
-  <h2>Три месяца, три источника, <em>{n(tot['budget'])} ₽</em></h2>
+  <h2>Три месяца, три источника, <em>2 700 000 ₽</em></h2>
   <p class="sub">CPM и CTR — средние показатели клиентов Церебро на сопровождении в Click Out, с надбавкой 15 %
   за узкое гео. Воронка в правых колонках посчитана по базовому сценарию: конверсия посадочной 3 %,
   из заявки в запись 85 %, доходимость 60 % — ваши цифры. Колонки «заявки — записи — приходы» —
@@ -501,17 +301,56 @@ A(f"""
     <tr><th>Источник</th><th class="num">Бюджет, ₽</th><th class="num">CPM, ₽</th><th class="num">Показы</th>
     <th class="num">CTR</th><th class="num">Клики</th><th class="num">CPC, ₽</th><th class="num">Заявки</th>
     <th class="num">Записи</th><th class="num">Приходы</th></tr>
-    {plan_html}
+    <tr class="head"><td colspan="10">Месяц 1 · Тест · бюджет 600 000 ₽ + работа 90 000 ₽</td></tr><tr><td class="name"><span class="chip ozon">Ozon Performance</span></td>
+        <td class="num">240 000</td><td class="num">258</td><td class="num">931 594</td>
+        <td class="num">0,64 %</td><td class="num">5 962</td><td class="num">40,3</td>
+        <td class="num">179</td><td class="num">152</td><td class="num">91</td></tr><tr><td class="name"><span class="chip urban">Яндекс Urban Ads</span></td>
+        <td class="num">180 000</td><td class="num">172</td><td class="num">1 048 300</td>
+        <td class="num">0,56 %</td><td class="num">5 870</td><td class="num">30,7</td>
+        <td class="num">176</td><td class="num">150</td><td class="num">90</td></tr><tr><td class="name"><span class="chip wb">WB Media</span></td>
+        <td class="num">180 000</td><td class="num">230</td><td class="num">782 178</td>
+        <td class="num">0,96 %</td><td class="num">7 509</td><td class="num">24,0</td>
+        <td class="num">225</td><td class="num">191</td><td class="num">115</td></tr><tr class="tot"><td>Итого месяц 1</td><td class="num">600 000</td>
+    <td class="num">217</td><td class="num">2 762 073</td><td class="num">0,70 %</td>
+    <td class="num">19 342</td><td class="num">31,0</td><td class="num">580</td>
+    <td class="num">493</td><td class="num">296</td></tr><tr class="head"><td colspan="10">Месяц 2 · Оптимизация · бюджет 900 000 ₽ + работа 90 000 ₽</td></tr><tr><td class="name"><span class="chip ozon">Ozon Performance</span></td>
+        <td class="num">400 000</td><td class="num">258</td><td class="num">1 552 656</td>
+        <td class="num">0,64 %</td><td class="num">9 937</td><td class="num">40,3</td>
+        <td class="num">298</td><td class="num">253</td><td class="num">152</td></tr><tr><td class="name"><span class="chip urban">Яндекс Urban Ads</span></td>
+        <td class="num">200 000</td><td class="num">172</td><td class="num">1 164 778</td>
+        <td class="num">0,56 %</td><td class="num">6 523</td><td class="num">30,7</td>
+        <td class="num">196</td><td class="num">166</td><td class="num">100</td></tr><tr><td class="name"><span class="chip wb">WB Media</span></td>
+        <td class="num">300 000</td><td class="num">230</td><td class="num">1 303 631</td>
+        <td class="num">0,96 %</td><td class="num">12 515</td><td class="num">24,0</td>
+        <td class="num">375</td><td class="num">319</td><td class="num">191</td></tr><tr class="tot"><td>Итого месяц 2</td><td class="num">900 000</td>
+    <td class="num">224</td><td class="num">4 021 066</td><td class="num">0,72 %</td>
+    <td class="num">28 975</td><td class="num">31,1</td><td class="num">869</td>
+    <td class="num">739</td><td class="num">443</td></tr><tr class="head"><td colspan="10">Месяц 3 · Масштаб · бюджет 1 200 000 ₽ + работа 90 000 ₽</td></tr><tr><td class="name"><span class="chip ozon">Ozon Performance</span></td>
+        <td class="num">550 000</td><td class="num">258</td><td class="num">2 134 903</td>
+        <td class="num">0,64 %</td><td class="num">13 663</td><td class="num">40,3</td>
+        <td class="num">410</td><td class="num">348</td><td class="num">209</td></tr><tr><td class="name"><span class="chip urban">Яндекс Urban Ads</span></td>
+        <td class="num">250 000</td><td class="num">172</td><td class="num">1 455 973</td>
+        <td class="num">0,56 %</td><td class="num">8 153</td><td class="num">30,7</td>
+        <td class="num">245</td><td class="num">208</td><td class="num">125</td></tr><tr><td class="name"><span class="chip wb">WB Media</span></td>
+        <td class="num">400 000</td><td class="num">230</td><td class="num">1 738 174</td>
+        <td class="num">0,96 %</td><td class="num">16 686</td><td class="num">24,0</td>
+        <td class="num">501</td><td class="num">426</td><td class="num">255</td></tr><tr class="tot"><td>Итого месяц 3</td><td class="num">1 200 000</td>
+    <td class="num">225</td><td class="num">5 329 050</td><td class="num">0,72 %</td>
+    <td class="num">38 503</td><td class="num">31,2</td><td class="num">1 155</td>
+    <td class="num">982</td><td class="num">589</td></tr><tr class="tot"><td>Всего за 3 месяца</td><td class="num">2 700 000</td><td class="num">—</td>
+<td class="num">12 112 188</td><td class="num">—</td><td class="num">86 820</td>
+<td class="num">31,1</td><td class="num">2 605</td><td class="num">2 214</td>
+<td class="num">1 328</td></tr>
   </table></div>
   <div class="g3" style="margin-top:18px">
-    <div class="card"><span class="tag"><span class="chip ozon">Ozon · {n(sum(m["budgets"]["ozon"] for m in MONTHS))} ₽</span></span>
+    <div class="card"><span class="tag"><span class="chip ozon">Ozon · 1 190 000 ₽</span></span>
       <p>Максимальный объём и самое сильное покупательское намерение: 65 млн активных покупателей, 83 % вне Москвы
       и Питера, 73 % — доход средний и выше. Здесь же «Ветаптека» и экран «Заказ выполнен». Самый дорогой клик из трёх —
       и самый тёплый.</p></div>
-    <div class="card"><span class="tag"><span class="chip urban">Urban Ads · {n(sum(m["budgets"]["urban"] for m in MONTHS))} ₽</span></span>
+    <div class="card"><span class="tag"><span class="chip urban">Urban Ads · 630 000 ₽</span></span>
       <p>Самый дешёвый охват (CPM от 50 ₽ по прайсу площадки) и единственный источник с гео по районам через Go —
       под пять адресов сети это прямая механика: показываем клинику тем, кто живёт в 10 минутах от неё.</p></div>
-    <div class="card"><span class="tag"><span class="chip wb">WB Media · {n(sum(m["budgets"]["wb"] for m in MONTHS))} ₽</span></span>
+    <div class="card"><span class="tag"><span class="chip wb">WB Media · 880 000 ₽</span></span>
       <p>Самый дешёвый клик (CTR 0,96 % — лучший из трёх) и женская аудитория 25–44 (78 % площадки) — это ядро
       покупателей зоотоваров и тот, кто в семье принимает решение вести питомца к врачу. Растёт в плане быстрее
       остальных именно поэтому.</p></div>
@@ -529,55 +368,62 @@ A(f"""
   Три сценария различаются только конверсией посадочной. Базовый — нижняя граница вашего диапазона (3 %);
   консервативный — половина от него, поправка на то, что баннерный трафик холоднее поискового; оптимистичный —
   5 %, внутри вашего же диапазона. Цена дошедшего и ДРР считаются с учётом стоимости работ агентства.</p>
-  {sc_table(sc1, rows_plan[0]['tot']['budget'], WORK, 'Месяц 1 · тест')}
-  {sc_table(sc3, tot['budget'], tot['work'], 'Итог трёх месяцев')}
+  <h3 style="margin-top:22px">Месяц 1 · тест · бюджет 600 000 ₽ + работа 90 000 ₽</h3>
+    <div class="scroll"><table class="tbl" style="margin-top:8px">
+    <tr><th>Сценарий</th><th class="num">Заявки</th><th class="num">Записи</th><th class="num">Дошли на первичку</th>
+    <th class="num">CPL</th><th class="num">Цена дошедшего</th><th class="num">Выручка первички</th><th class="num">ДРР</th></tr>
+    <tr><td class="name"><b>Консервативный</b><br><span style="font-size:11px;color:#74747d">CR 1,5 %</span></td>
+        <td class="num">290</td><td class="num">247</td><td class="num">148</td>
+        <td class="num">2 378 ₽</td><td class="num">4 663 ₽</td><td class="num">887 779 ₽</td>
+        <td class="num">77,7 %</td></tr><tr class="tot"><td class="name"><b>Базовый</b><br><span style="font-size:11px;color:#74747d">CR 3,0 %</span></td>
+        <td class="num">580</td><td class="num">493</td><td class="num">296</td>
+        <td class="num">1 189 ₽</td><td class="num">2 332 ₽</td><td class="num">1 775 559 ₽</td>
+        <td class="num">38,9 %</td></tr><tr><td class="name"><b>Оптимистичный</b><br><span style="font-size:11px;color:#74747d">CR 5,0 %</span></td>
+        <td class="num">967</td><td class="num">822</td><td class="num">493</td>
+        <td class="num">713 ₽</td><td class="num">1 399 ₽</td><td class="num">2 959 264 ₽</td>
+        <td class="num">23,3 %</td></tr></table></div>
+  <h3 style="margin-top:22px">Итог трёх месяцев · бюджет 2 700 000 ₽ + работа 270 000 ₽</h3>
+    <div class="scroll"><table class="tbl" style="margin-top:8px">
+    <tr><th>Сценарий</th><th class="num">Заявки</th><th class="num">Записи</th><th class="num">Дошли на первичку</th>
+    <th class="num">CPL</th><th class="num">Цена дошедшего</th><th class="num">Выручка первички</th><th class="num">ДРР</th></tr>
+    <tr><td class="name"><b>Консервативный</b><br><span style="font-size:11px;color:#74747d">CR 1,5 %</span></td>
+        <td class="num">1 302</td><td class="num">1 107</td><td class="num">664</td>
+        <td class="num">2 281 ₽</td><td class="num">4 472 ₽</td><td class="num">3 985 016 ₽</td>
+        <td class="num">74,5 %</td></tr><tr class="tot"><td class="name"><b>Базовый</b><br><span style="font-size:11px;color:#74747d">CR 3,0 %</span></td>
+        <td class="num">2 605</td><td class="num">2 214</td><td class="num">1 328</td>
+        <td class="num">1 140 ₽</td><td class="num">2 236 ₽</td><td class="num">7 970 031 ₽</td>
+        <td class="num">37,3 %</td></tr><tr><td class="name"><b>Оптимистичный</b><br><span style="font-size:11px;color:#74747d">CR 5,0 %</span></td>
+        <td class="num">4 341</td><td class="num">3 690</td><td class="num">2 214</td>
+        <td class="num">684 ₽</td><td class="num">1 342 ₽</td><td class="num">13 283 385 ₽</td>
+        <td class="num">22,4 %</td></tr></table></div>
   <div class="note"><b>Проверка на реальность:</b> в нашем проекте в медицине, ближайшем к вам по географии —
   стоматология с шестью филиалами в Тюмени и Екатеринбурге — лид в первую неделю стоил 2 079 ₽,
   а в лучшем сегменте 45–54 — 878 ₽. Базовый сценарий этого медиаплана даёт CPL 1 189 ₽, то есть попадает
   внутрь этого коридора. Оговорка честная: там другая услуга, другой чек и другой цикл решения — это ориентир
   порядка величины, а не перенос результата.</div>
   <dl class="yband">
-    <div><dt>Базовый сценарий, 3 месяца</dt><dd>{n(sc3['base']['doh'])} первичных пациентов<small>{n(sc3['base']['leads'])} заявок · {n(sc3['base']['zap'])} записей</small></dd></div>
-    <div><dt>Цена дошедшего</dt><dd>{n(sc3['base']['cac'])} ₽<small>включая работу агентства</small></dd></div>
-    <div><dt>Выручка первички</dt><dd>{n(sc3['base']['rev'])} ₽<small>без учёта повторных визитов и диагностики</small></dd></div>
-    <div><dt>ДРР</dt><dd>{n(sc3['base']['drr'],1)} %<small>к выручке первичного приёма</small></dd></div>
+    <div><dt>Базовый сценарий, 3 месяца</dt><dd>1 328 первичных пациентов<small>2 605 заявок · 2 214 записей</small></dd></div>
+    <div><dt>Цена дошедшего</dt><dd>2 236 ₽<small>включая работу агентства</small></dd></div>
+    <div><dt>Выручка первички</dt><dd>7 970 031 ₽<small>без учёта повторных визитов и диагностики</small></dd></div>
+    <div><dt>ДРР</dt><dd>37,3 %<small>к выручке первичного приёма</small></dd></div>
   </dl>
   <div class="g2" style="margin-top:18px">
     <div class="card warn"><span class="tag">Честно про сравнение с Директом</span>
       <p>Ваш нынешний CAC — 300–1 500 ₽. В базовом сценарии Click Out даёт дошедшего пациента за
-      <b>{n(sc3['base']['cac'])} ₽</b>, в оптимистичном — за <b>{n(sc3['opt']['cac'])} ₽</b>, и только это попадает
+      <b>2 236 ₽</b>, в оптимистичном — за <b>1 342 ₽</b>, и только это попадает
       в ваш текущий коридор.</p>
       <p>Так и должно быть: Директ снимает готовый спрос, а мы покупаем аудиторию, которой в поиске сегодня нет.
       Обещать лид дешевле Директа мы не будем. Правильное сравнение — не «дешевле ли», а «сколько ещё пациентов
       можно взять сверх того, что уже выбрано в поиске, и по какой цене это остаётся рентабельным».</p></div>
     <div class="card acc"><span class="tag y">Где на самом деле окупаемость</span>
-      <p>Выручка первичного приёма ({n(CHEK)} ₽) уже превышает цену дошедшего в базовом сценарии в <b>2,7 раза</b>.
+      <p>Выручка первичного приёма (6 000 ₽) уже превышает цену дошедшего в базовом сценарии в <b>2,7 раза</b>.
       Но первичка — это вход: дальше повторный приём, диагностика, стационар, операция. У сети, где 485 услуг
       и 224 124 пациента за 21 год, экономика канала считается по LTV пациента, а не по одному визиту.</p>
       <p><b>Нужно от вас:</b> средняя выручка на пациента за первые 3, 6 и 12 месяцев из МИС. С этой цифрой мы
       пересчитаем таблицу и покажем реальную окупаемость — сейчас мы сознательно считаем по самому строгому варианту.</p></div>
   </div>
 </section>
-""")
 
-entry_html = ""
-for r in entry_rows:
-    e = r["e"]
-    src_chips = " ".join(f'<span class="chip {k}">{n(v)}</span>' for k, v in e["b"].items() if v)
-    cls = ' class="tot"' if e["key"] == "base" else ""
-    entry_html += f"""<tr{cls}><td class="name"><b>{e['name']}</b><br><span style="font-size:11px;color:#74747d">{e['sub']}</span></td>
-    <td>{src_chips}</td><td class="num">{n(r['bud'])}</td><td class="num">{n(e['work'])}</td>
-    <td class="num">{n(r['imps'])}</td><td class="num">{n(r['clicks'])}</td>
-    <td class="num">{n(r['f']['leads'])}</td><td class="num">{n(r['f']['doh'])}</td>
-    <td class="num">{n(r['f']['cac'])} ₽</td></tr>"""
-
-diag_html = "".join(
-    f"""<tr{' class="tot"' if k=='База' else ''}><td class="name"><b>{k}</b><br><span style="font-size:11px;color:#74747d">CR {n(v['cr']*100,1)} %</span></td>
-    <td class="num">{n(v['chek'])} ₽</td><td class="num">{n(v['leads'])}</td><td class="num">{n(v['doh'])}</td>
-    <td class="num">{n(v['cac'])} ₽</td><td class="num">{n(v['rev'])} ₽</td><td class="num">{n(v['drr'],1)} %</td></tr>"""
-    for k, v in diag.items())
-
-A(f"""
 <section id="s8">
   <div class="kicker"><i class="bar"></i><span>08 · Варианты входа</span></div>
   <h2>Три варианта старта — <em>на выбор</em></h2>
@@ -587,7 +433,19 @@ A(f"""
     <tr><th>Вариант</th><th>Сплит по источникам, ₽</th><th class="num">Бюджет</th><th class="num">Работа</th>
     <th class="num">Показы</th><th class="num">Клики</th><th class="num">Заявки</th><th class="num">Приходы</th>
     <th class="num">Цена дошедшего</th></tr>
-    {entry_html}
+    <tr><td class="name"><b>Пилот</b><br><span style="font-size:11px;color:#74747d">один источник, Ozon</span></td>
+    <td><span class="chip ozon">250 000</span></td><td class="num">250 000</td><td class="num">50 000</td>
+    <td class="num">970 410</td><td class="num">6 211</td>
+    <td class="num">186</td><td class="num">95</td>
+    <td class="num">3 157 ₽</td></tr><tr class="tot"><td class="name"><b>Рекомендуем</b><br><span style="font-size:11px;color:#74747d">три источника</span></td>
+    <td><span class="chip ozon">240 000</span> <span class="chip urban">180 000</span> <span class="chip wb">180 000</span></td><td class="num">600 000</td><td class="num">90 000</td>
+    <td class="num">2 762 073</td><td class="num">19 342</td>
+    <td class="num">580</td><td class="num">296</td>
+    <td class="num">2 332 ₽</td></tr><tr><td class="name"><b>Потолок гео</b><br><span style="font-size:11px;color:#74747d">три источника, максимум</span></td>
+    <td><span class="chip ozon">550 000</span> <span class="chip urban">250 000</span> <span class="chip wb">400 000</span></td><td class="num">1 200 000</td><td class="num">90 000</td>
+    <td class="num">5 329 050</td><td class="num">38 503</td>
+    <td class="num">1 155</td><td class="num">589</td>
+    <td class="num">2 190 ₽</td></tr>
   </table></div>
   <div class="g3" style="margin-top:18px">
     <div class="card"><span class="tag">Пилот</span><p>Дешевле войти, но один источник даёт одну гипотезу и одну частоту.
@@ -605,14 +463,20 @@ A(f"""
 <section id="s9">
   <div class="kicker"><i class="bar"></i><span>09 · Диагностика</span></div>
   <h2>КТ и МРТ: <em>другая экономика</em> в том же бюджете</h2>
-  <p class="sub">Это не дополнительные деньги, а другой взгляд на те же 35 % бюджета месяца 2 ({n(diag_budget)} ₽),
+  <p class="sub">Это не дополнительные деньги, а другой взгляд на те же 35 % бюджета месяца 2 (315 000 ₽),
   которые в плане уходят на диагностический кластер. Конверсия здесь ниже — решение дороже и дольше, — зато чек
   в 1,5–2 раза выше первички: КТ 9 000 ₽ (11 700 ₽ с контрастом), МРТ 12 000 ₽.
   Расчёт <b>не суммируется</b> с основной таблицей, он её уточняет.</p>
   <div class="scroll"><table class="tbl">
     <tr><th>Сценарий</th><th class="num">Чек</th><th class="num">Заявки</th><th class="num">Дошли</th>
     <th class="num">Цена дошедшего</th><th class="num">Выручка</th><th class="num">ДРР</th></tr>
-    {diag_html}
+    <tr><td class="name"><b>Консервативно</b><br><span style="font-size:11px;color:#74747d">CR 1,0 %</span></td>
+    <td class="num">9 000 ₽</td><td class="num">101</td><td class="num">52</td>
+    <td class="num">6 091 ₽</td><td class="num">465 477 ₽</td><td class="num">67,7 %</td></tr><tr class="tot"><td class="name"><b>База</b><br><span style="font-size:11px;color:#74747d">CR 2,0 %</span></td>
+    <td class="num">10 350 ₽</td><td class="num">203</td><td class="num">103</td>
+    <td class="num">3 045 ₽</td><td class="num">1 070 598 ₽</td><td class="num">29,4 %</td></tr><tr><td class="name"><b>Оптимистично</b><br><span style="font-size:11px;color:#74747d">CR 3,5 %</span></td>
+    <td class="num">12 000 ₽</td><td class="num">355</td><td class="num">181</td>
+    <td class="num">1 740 ₽</td><td class="num">2 172 227 ₽</td><td class="num">14,5 %</td></tr>
   </table></div>
   <div class="g2" style="margin-top:18px">
     <div class="card acc"><span class="tag y">Почему это сильнейший аргумент в гео</span>
@@ -633,9 +497,9 @@ A(f"""
   <p class="sub">Задача звучала как «5 000 сделок в месяц, можем в три раза больше» — то есть плюс около 10 000 сделок
   в месяц. Считаем, сколько из них реально забирает Click Out в месяце 3, на потолке гео.</p>
   <div class="g3">
-    <div class="card stat"><span class="big">{n(m3f['cons']['doh'])}</span><span class="cap">пациентов в месяц, консервативно — это <b>{n(share_m3['cons'],1)} %</b> от цели</span></div>
-    <div class="card stat"><span class="big">{n(m3f['base']['doh'])}</span><span class="cap">пациентов в месяц, базово — <b>{n(share_m3['base'],1)} %</b> от цели</span></div>
-    <div class="card stat"><span class="big">{n(m3f['opt']['doh'])}</span><span class="cap">пациентов в месяц, оптимистично — <b>{n(share_m3['opt'],1)} %</b> от цели</span></div>
+    <div class="card stat"><span class="big">295</span><span class="cap">пациентов в месяц, консервативно — это <b>2,9 %</b> от цели</span></div>
+    <div class="card stat"><span class="big">589</span><span class="cap">пациентов в месяц, базово — <b>5,9 %</b> от цели</span></div>
+    <div class="card stat"><span class="big">982</span><span class="cap">пациентов в месяц, оптимистично — <b>9,8 %</b> от цели</span></div>
   </div>
   <div class="card warn" style="margin-top:18px"><span class="tag">Говорим прямо</span>
     <ul>
@@ -650,9 +514,7 @@ A(f"""
     </ul>
   </div>
 </section>
-""")
 
-A(f"""
 <section id="s11">
   <div class="kicker"><i class="bar"></i><span>11 · Замеры</span></div>
   <h2>Как отличим наших пациентов <em>от тех, кто пришёл бы и так</em></h2>
@@ -664,7 +526,7 @@ A(f"""
       <td>Прирост поиска по имени. Снимаем частотность в Вордстате до старта, во время флайта и месяц после;
       отдельно ведём контрольный запрос категории, чтобы отделить ваш рост от роста рынка.</td>
       <td>Бренд «ветдоктор екатеринбург» против контрольного «ветклиника екатеринбург». Порог по показам:
-      до 100 тыс. показов эффекта нет, 1–3 млн — устойчивый рост; в месяце 1 у нас {n(rows_plan[0]['tot']['imps'])} показов.</td></tr>
+      до 100 тыс. показов эффекта нет, 1–3 млн — устойчивый рост; в месяце 1 у нас 2 762 073 показов.</td></tr>
     <tr><td class="name"><b>Brand lift</b></td>
       <td>Прирост знания и намерения: опрос двух групп до и после. Бесплатное исследование Яндекса — от бюджета
       около 1 млн ₽ и охвата от 2 млн; упрощённая схема опросов — от ~12 тыс. ₽.</td>
@@ -722,7 +584,7 @@ A(f"""
     <div><dt>Месяц 1</dt><dd>600 000 ₽ + 90 000 ₽<small>тест трёх источников</small></dd></div>
     <div><dt>Месяц 2</dt><dd>900 000 ₽ + 90 000 ₽<small>перераспределение в лидера</small></dd></div>
     <div><dt>Месяц 3</dt><dd>1 200 000 ₽ + 90 000 ₽<small>потолок гео</small></dd></div>
-    <div><dt>Итого 3 месяца</dt><dd>{n(tot['all'])} ₽<small>бюджет {n(tot['budget'])} ₽ + работа {n(tot['work'])} ₽</small></dd></div>
+    <div><dt>Итого 3 месяца</dt><dd>2 970 000 ₽<small>бюджет 2 700 000 ₽ + работа 270 000 ₽</small></dd></div>
   </dl>
 </section>
 
@@ -764,8 +626,4 @@ A(f"""
   <span>Церебро Таргет · направление Click Out · работаем через агентский кабинет на Ozon Performance, Яндекс Urban Ads и WB Media</span>
   <span>support@cerebrotarget.ru · t.me/cerebro_manager · медиаплан для сети «Ветдоктор», 16.09.2026</span>
 </footer>
-</div></body></html>""")
-
-import os
-open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "mediaplan", "index.html"), "w", encoding="utf-8").write("".join(H))
-print("index.html:", len("".join(H)), "байт")
+</div></body></html>

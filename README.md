@@ -1,11 +1,12 @@
-# Медиаплан Click Out — сеть ветклиник «Ветдоктор»
+# Ветдоктор · материалы Церебро
 
-Ozon Performance · Яндекс Urban Ads · WB Media → vetdoctor.ru
-Екатеринбург и Верхняя Пышма, горизонт 3 месяца.
+- **Коммерческое предложение по четырём каналам** — корень сайта:
+  https://omenikarch.github.io/media_plan_vetdoctor_clickout/
+- **Медиаплан Click Out** (Ozon Performance, Яндекс Urban Ads, WB Media) — подробный разбор:
+  https://omenikarch.github.io/media_plan_vetdoctor_clickout/mediaplan/
 
-Страница: **https://omenikarch.github.io/media_plan_vetdoctor_clickout/**
+Обе страницы собираются генераторами и лежат в рабочей папке агентства:
+КП — `ИСХОДЯЩИЕ/Vetdoctor_KP/build.py` (пишет и сюда, в корень),
+медиаплан — `build.py` в этой папке (пишет в `mediaplan/index.html`).
 
-- `index.html` — медиаплан
-- `build.py` — генератор: все расчёты в одном файле, `python3 build.py` пересобирает страницу
-
-Агентство «Церебро Таргет», направление Click Out · support@cerebrotarget.ru · t.me/cerebro_manager
+Агентство «Церебро Таргет» · support@cerebrotarget.ru · t.me/cerebro_manager
